@@ -1,0 +1,4 @@
+/LOG
+__pycache__/
+config.cfg
+*.sqlite

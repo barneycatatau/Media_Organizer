@@ -1,0 +1,84 @@
+[PATHS]
+# ─────────────────────────────────────────────────────────────
+# SOURCE — folder to scan recursively for photos and videos
+#   Used by: media_organizer.py, duplicate_check.py
+# ─────────────────────────────────────────────────────────────
+# Windows local path:
+source_path=C:\Photos\Unsorted
+# Windows network path:
+# source_path=\\192.168.1.100\NAS\Unsorted
+# Linux / macOS:
+# source_path=/home/user/photos/unsorted
+
+# ─────────────────────────────────────────────────────────────
+# DESTINATION — folder where organized files will be copied
+#   Used by: media_organizer.py
+# ─────────────────────────────────────────────────────────────
+# Note: the script COPIES files — the source is never modified.
+destination_path=C:\Photos\Organized
+# destination_path=\\192.168.1.100\NAS\Organized
+
+# ─────────────────────────────────────────────────────────────
+# DUPLICATES — where to move duplicate files found by duplicate_check.py
+#   Use a valid path to move duplicates for manual review (safer).
+#   Use 'no' to permanently delete duplicates (no recovery possible).
+# ─────────────────────────────────────────────────────────────
+move_duplicate_to_path=C:\Photos\Duplicates
+# move_duplicate_to_path=no
+
+# ─────────────────────────────────────────────────────────────
+# FILE EXTENSIONS — files to process (no dots, comma-separated)
+# ─────────────────────────────────────────────────────────────
+
+# Extensions scanned by duplicate_check.py
+image_extensions=jpg, jpeg, png, heic
+video_extensions=mov, avi, mp4, mkv
+
+# Extensions organized by media_organizer.py
+organize_image_extensions=jpg, jpeg, png, heic
+organize_video_extensions=mov, avi, mp4, mkv
+
+# ─────────────────────────────────────────────────────────────
+# GPS — group files by country using embedded GPS coordinates
+#   yes → destination\YYYY\Country\file.jpg
+#   no  → destination\YYYY\file.jpg
+#
+# Uses OpenStreetMap Nominatim (free, no API key needed).
+# Responses are cached in a local SQLite database.
+# Rate limit: 1 request per second.
+# ─────────────────────────────────────────────────────────────
+GPS=yes
+
+# ─────────────────────────────────────────────────────────────
+# YEAR-WISE — group files by year
+#   yes + GPS=yes → destination\YYYY\Country\file.jpg
+#   yes + GPS=no  → destination\YYYY\file.jpg
+#   no  + GPS=yes → destination\Country\file.jpg
+#   no  + GPS=no  → destination\file.jpg
+# ─────────────────────────────────────────────────────────────
+year_wise=yes
+
+# ─────────────────────────────────────────────────────────────
+# VERIFY BEFORE COPY — skip files already present at destination
+#   yes → computes SHA-256 hash; skips identical files (slower, safer)
+#   no  → skips verification (faster on first run)
+# ─────────────────────────────────────────────────────────────
+verify_before_copy=yes
+
+# ─────────────────────────────────────────────────────────────
+# RENAME PREFIX — rename files with a sequential counter
+#   no          → keep original filename (duplicates get a numeric suffix)
+#   IMG_        → IMG_0001.jpg, IMG_0002.jpg, ...
+#   PHOTO_      → PHOTO_0001.jpg, PHOTO_0002.jpg, ...
+# ─────────────────────────────────────────────────────────────
+rename_prefix=no
+
+# ─────────────────────────────────────────────────────────────
+# UNDO — log file to use when reverting a previous organization run
+#   Used by: media_organizer_undo.py
+#   Specify the relative or absolute path to a .log file generated
+#   by a previous media_organizer.py run.
+#   Use 'no' to prevent accidental undo execution.
+# ─────────────────────────────────────────────────────────────
+undo=no
+# undo=LOG\media_organizer_20260101_120000.log

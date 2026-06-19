@@ -1,0 +1,14 @@
+Pillow>=10.0.0
+pillow-heif>=0.13.0
+geopy>=2.4.0
+
+# Para extração de metadados de vídeo (opcional mas recomendado):
+# ffmpeg deve ser instalado no sistema
+# Windows: Baixar de https://ffmpeg.org/download.html e adicionar ao PATH
+# Linux: sudo apt-get install ffmpeg
+# macOS: brew install ffmpeg
+
+# Nota sobre GPS:
+# geopy é necessário apenas se GPS=yes no config.cfg
+# Usa o serviço Nominatim (OpenStreetMap) - gratuito e sem necessidade de API key
+# Rate limit: 1 requisição por segundo
