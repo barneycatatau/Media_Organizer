@@ -29,8 +29,9 @@ The HTML report provides a complete visual summary of the operation.
 | 🧵 | Worker Threads | Parallel worker threads used |
 | 🗄️ | GPS Cache Reads | Country lookups served from local cache (no API call) |
 | 💾 | GPS Cache Writes | New geolocation entries stored in the local cache |
-| 🌍 | With GPS | Files containing GPS coordinates |
+| 🌍 | With GPS | Files with GPS coordinates and a resolved country |
 | ❓ | Without GPS | Files without GPS coordinates (when GPS is enabled) |
+| 📍 | GPS Failure | Files with coordinates for which no country was resolved |
 | 📂 | Folders Created | New folders generated at the destination |
 | ✅ | Files Copied | Successfully copied files |
 | 🚫 | Ignored Files | Files skipped due to unsupported extensions |
@@ -48,25 +49,29 @@ GPS=yes
 
 Displays the number of files assigned to each country as a card grid.
 
-Files without coordinates are grouped under:
+Files without a resolved country are labeled in the report as:
 
 ```text
-(No GPS)
+Sem GPS
 ```
+
+This is a reporting label, not a destination folder name. With `year_wise=yes`, those files are copied directly below their year folder.
 
 ---
 
 ### 🗂️ Folder Structure Summary
 
-A hierarchical listing of folders created at the destination. For each folder, displays:
+This section summarizes copied files by their extracted year and country metadata. For each group, it displays:
 
-- Full path
+- Reported destination path
 - Image count
 - Video count
 - Total files
 - Sample list of the first 50 copied files
 
 > 💡 Files beyond the first 50 are omitted for report performance.
+
+The report is not a fresh filesystem scan. For the exact destination of every successful copy—especially when `year_wise=no` preserves source-relative folders—use the `Copied: source -> destination` entries in the text log.
 
 ---
 
@@ -99,8 +104,8 @@ If this section appears, review each item to ensure no important file was skippe
 |------|----------|-------------|
 | 📁 | Folders Scanned | Directories processed |
 | 📄 | Files Processed | Total files analyzed |
-| ✅ | Unique Files | Files without duplicates |
-| ⛔ | Duplicates Found | Duplicate files detected |
+| ✅ | Unique Files | Distinct SHA-256 content groups; includes the retained file from duplicate groups |
+| ⛔ | Duplicates Found | Extra copies detected across the entire recursive `source_path` tree |
 | 📦 | Files Moved | Duplicates moved to the review folder |
 | 🗑️ | Files Deleted | Permanently removed duplicates |
 | ⚡ | Files Per Minute | Processing speed |
@@ -116,7 +121,9 @@ Shows the parameters used in the run:
 - Source path
 - Duplicate action (move or delete)
 - Extensions analyzed
-- Selection rule used (oldest file is kept; alphabetical order on tie)
+- Selection rule used (lowest filesystem `ctime`; case-insensitive filename on tie)
+
+Only byte-for-byte identical files share a duplicate group. The scan is global across all subfolders, rather than restarting the comparison for each folder.
 
 ---
 

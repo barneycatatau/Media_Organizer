@@ -8,6 +8,7 @@ import hashlib
 import os
 import shutil
 import configparser
+import ctypes
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Dict, List, Optional
@@ -39,6 +40,10 @@ class MediaOrganizer:
         self.config_file = config_file
         self.source_path = None
         self.destination_path = None
+        self.network_username = None
+        self.network_password = None
+        self.network_domain = None
+        self.network_connected_shares = set()
         self.gps_enabled = False
         self.verify_before_copy = False
         self.rename_prefix = "no"
@@ -94,6 +99,8 @@ class MediaOrganizer:
 
         self._load_config()
         self._setup_logging()
+        self._prepare_destination_network_path()
+        self._validate_destination_path()
         self._check_ffprobe()
         if self.gps_enabled:
             self._setup_gps_cache()
@@ -122,6 +129,9 @@ class MediaOrganizer:
         
         self.source_path = config['PATHS'].get('source_path', '').strip()
         self.destination_path = config['PATHS'].get('destination_path', '').strip()
+        self.network_username = config['PATHS'].get('network_username', '').strip() or None
+        self.network_password = config['PATHS'].get('network_password', '').strip() or None
+        self.network_domain = config['PATHS'].get('network_domain', '').strip() or None
 
         # Tipos de mídia suportados para leitura de metadata:
         # imagens via EXIF (jpg, jpeg, png, heic*) e vídeos via ffprobe (mov, avi, mp4, mkv).
@@ -161,6 +171,132 @@ class MediaOrganizer:
         
         if not os.path.exists(self.source_path):
             raise FileNotFoundError(f"Source path does not exist: {self.source_path}")
+
+    def _get_unc_share(self, raw_path: str) -> Optional[str]:
+        r"""Return the UNC share portion from a path (\\server\share), if present."""
+        normalized = raw_path.replace('/', '\\')
+        if not normalized.startswith('\\\\'):
+            return None
+
+        parts = [part for part in normalized.split('\\') if part]
+        if len(parts) < 2:
+            raise ValueError(
+                f"Network destination must include a share name, for example \\\\server\\share: {raw_path}"
+            )
+
+        return f"\\\\{parts[0]}\\{parts[1]}"
+
+    def _prepare_destination_network_path(self):
+        """Ensure the destination UNC share is accessible before copying."""
+        unc_share = self._get_unc_share(self.destination_path)
+        if not unc_share or unc_share in self.network_connected_shares:
+            return
+
+        if os.name != 'nt':
+            self._log(f"Network destination detected; relying on OS mount: {unc_share}")
+            return
+
+        username = self.network_username
+        if username and self.network_domain and '\\' not in username and '@' not in username:
+            username = f"{self.network_domain}\\{username}"
+
+        if not username:
+            self._log(
+                f"Network destination detected without configured credentials: {unc_share}. "
+                "Using the current Windows session."
+            )
+            return
+
+        class NETRESOURCEW(ctypes.Structure):
+            _fields_ = [
+                ("dwScope", ctypes.c_ulong),
+                ("dwType", ctypes.c_ulong),
+                ("dwDisplayType", ctypes.c_ulong),
+                ("dwUsage", ctypes.c_ulong),
+                ("lpLocalName", ctypes.c_wchar_p),
+                ("lpRemoteName", ctypes.c_wchar_p),
+                ("lpComment", ctypes.c_wchar_p),
+                ("lpProvider", ctypes.c_wchar_p),
+            ]
+
+        net_resource = NETRESOURCEW(
+            0,
+            1,  # RESOURCETYPE_DISK
+            0,
+            0,
+            None,
+            unc_share,
+            None,
+            None,
+        )
+
+        result = ctypes.windll.mpr.WNetAddConnection2W(
+            ctypes.byref(net_resource),
+            self.network_password,
+            username,
+            0,
+        )
+
+        if result == 0:
+            self.network_connected_shares.add(unc_share)
+            self._log(f"Connected to network destination {unc_share} using configured credentials")
+            return
+
+        if result in (85, 1202):  # Already connected/remembered.
+            self.network_connected_shares.add(unc_share)
+            self._log(f"Network destination already connected: {unc_share}")
+            return
+
+        if result == 1219:
+            raise PermissionError(
+                f"Windows already has a connection to {unc_share} with different credentials. "
+                "Disconnect that share in Windows or use the same account in network_username/network_password."
+            )
+
+        if result in (86, 1326):
+            raise PermissionError(
+                f"Cannot authenticate to {unc_share}. Configured network_username/network_password were rejected."
+            )
+
+        raise OSError(result, f"Cannot connect to network destination {unc_share}: {ctypes.WinError(result)}")
+
+    def _network_auth_hint(self, error: Exception) -> str:
+        if not self._get_unc_share(self.destination_path):
+            return ""
+
+        winerror = getattr(error, "winerror", None) or getattr(error, "errno", None)
+        if winerror not in (86, 1326):
+            return ""
+
+        if self.network_username:
+            return " Configured network_username/network_password were rejected by Windows."
+
+        return (
+            " The destination is a network path and Windows rejected the current process credentials. "
+            "Add network_username and network_password to config.cfg, or run the script from a terminal "
+            "that can access the same UNC path."
+        )
+
+    def _validate_destination_path(self):
+        destination = Path(self.destination_path)
+        test_file = destination / ".media_organizer_write_test"
+
+        try:
+            destination.mkdir(parents=True, exist_ok=True)
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("ok")
+            test_file.unlink()
+            self._log(f"Destination path is writable: {destination}")
+        except Exception as e:
+            try:
+                if test_file.exists():
+                    test_file.unlink()
+            except Exception:
+                pass
+
+            raise PermissionError(
+                f"Destination path is not writable: {destination}. {e}{self._network_auth_hint(e)}"
+            ) from e
     
     def _calculate_hash(self, file_path: str) -> str:
         """Calculate SHA-256 hash for a file"""
@@ -170,9 +306,37 @@ class MediaOrganizer:
                 sha256.update(chunk)
         return sha256.hexdigest()
 
+    @staticmethod
+    def _destination_cache_key(folder_path: Path) -> str:
+        """Return a stable, case-insensitive key for a destination folder."""
+        return os.path.normcase(os.path.abspath(str(folder_path)))
+
+    @staticmethod
+    def _path_is_within(path: str, folder: str) -> bool:
+        """Return whether path is folder itself or one of its descendants."""
+        try:
+            normalized_path = os.path.normcase(os.path.abspath(path))
+            normalized_folder = os.path.normcase(os.path.abspath(folder))
+            return os.path.commonpath([normalized_path, normalized_folder]) == normalized_folder
+        except ValueError:
+            # Different Windows drives/shares cannot contain one another.
+            return False
+
+    @staticmethod
+    def _merge_hash_indexes(
+        target: Dict[str, List[str]],
+        source: Dict[str, List[str]]
+    ) -> int:
+        """Merge source into target and return the number of referenced files."""
+        merged_files = 0
+        for file_hash, paths in source.items():
+            target.setdefault(file_hash, []).extend(paths)
+            merged_files += len(paths)
+        return merged_files
+
     def _build_destination_hash_index(self, folder_path: Path) -> Dict[str, List[str]]:
         """Build hash index for existing files in a specific destination folder"""
-        folder_key = str(folder_path)
+        folder_key = self._destination_cache_key(folder_path)
         if folder_key in self.destination_hash_index:
             return self.destination_hash_index[folder_key]
 
@@ -181,9 +345,48 @@ class MediaOrganizer:
             return self.destination_hash_index[folder_key]
 
         self._log(f"Verifying destination for duplicates: {folder_path}")
+        print(f"\nIndexing destination for duplicates: {folder_path}", flush=True)
+
+        # If a parent was already indexed, the requested subtree can be derived
+        # without touching the destination again.
+        for cached_folder, cached_index in self.destination_hash_index.items():
+            if self._path_is_within(folder_key, cached_folder):
+                folder_index = {
+                    file_hash: [
+                        path for path in paths
+                        if self._path_is_within(path, folder_key)
+                    ]
+                    for file_hash, paths in cached_index.items()
+                }
+                folder_index = {
+                    file_hash: paths
+                    for file_hash, paths in folder_index.items()
+                    if paths
+                }
+                self.destination_hash_index[folder_key] = folder_index
+                reused_files = sum(len(paths) for paths in folder_index.values())
+                self._log(
+                    f"Destination index derived from cached parent: "
+                    f"{reused_files} files reused"
+                )
+                return folder_index
 
         folder_index: Dict[str, List[str]] = {}
-        for root, _, files in os.walk(folder_path):
+        indexed_files = 0
+        reused_files = 0
+        index_started_at = time.monotonic()
+        last_progress_at = index_started_at
+        for root, dirs, files in os.walk(folder_path):
+            root_key = self._destination_cache_key(Path(root))
+            if root_key != folder_key and root_key in self.destination_hash_index:
+                reused_files += self._merge_hash_indexes(
+                    folder_index,
+                    self.destination_hash_index[root_key]
+                )
+                # This complete subtree is already represented by its cache.
+                dirs[:] = []
+                continue
+
             for filename in files:
                 file_path = os.path.join(root, filename)
                 try:
@@ -195,7 +398,26 @@ class MediaOrganizer:
                 except Exception as e:
                     self._log(f"  Error hashing destination file {file_path}: {e}")
 
+                indexed_files += 1
+                now = time.monotonic()
+                if now - last_progress_at >= 2:
+                    elapsed = self._format_duration(now - index_started_at)
+                    message = (
+                        f"Indexing destination: {indexed_files} files hashed "
+                        f"({elapsed})"
+                    )
+                    print(f"\r{message}", end='', flush=True)
+                    self._log(message)
+                    last_progress_at = now
+
         self.destination_hash_index[folder_key] = folder_index
+        elapsed = self._format_duration(time.monotonic() - index_started_at)
+        message = f"Destination index ready: {indexed_files} files hashed"
+        if reused_files:
+            message += f", {reused_files} files reused from cached subfolders"
+        message += f" ({elapsed})"
+        print(f"\r{message}", flush=True)
+        self._log(message)
         return folder_index
 
     def _setup_logging(self):
@@ -356,17 +578,21 @@ class MediaOrganizer:
             except Empty:
                 continue
 
-            lat = request['lat']
-            lon = request['lon']
             event = request['event']
             container = request['container']
-
-            country = self._get_country_from_gps(lat, lon)
-            if country:
-                self._write_country_to_cache(lat, lon, country)
-            container['country'] = country
-            event.set()
-            self.geocode_queue.task_done()
+            try:
+                lat = request['lat']
+                lon = request['lon']
+                country = self._get_country_from_gps(lat, lon)
+                if country:
+                    self._write_country_to_cache(lat, lon, country)
+                container['country'] = country
+            except Exception as e:
+                container['country'] = None
+                self._log(f"  Geocoding worker error: {e}")
+            finally:
+                event.set()
+                self.geocode_queue.task_done()
 
         self._log("Geocoding worker thread stopped")
     
@@ -905,11 +1131,11 @@ class MediaOrganizer:
                 with self.hash_lock:
                     self.hash_index[file_hash] = str(destination_file)
                     if self.verify_before_copy:
-                        folder_key = str(year_folder)
-                        self.destination_hash_index.setdefault(folder_key, {}).setdefault(
-                            file_hash,
-                            []
-                        ).append(str(destination_file))
+                        destination_path = str(destination_file)
+                        # Keep every already-built ancestor/subtree cache coherent.
+                        for cached_folder, cached_index in self.destination_hash_index.items():
+                            if self._path_is_within(destination_path, cached_folder):
+                                cached_index.setdefault(file_hash, []).append(destination_path)
                     if self.rename_prefix != "no":
                         with self.rename_lock:
                             if counter >= self.rename_counter:
@@ -928,7 +1154,7 @@ class MediaOrganizer:
                 with self.hash_lock:
                     if self.hash_index.get(file_hash) is None:
                         self.hash_index.pop(file_hash, None)
-            error_msg = f"Error copying {source_file}: {e}"
+            error_msg = f"Error copying {source_file}: {e}{self._network_auth_hint(e)}"
             self.stats['errors'].append(error_msg)
             self._log(f"ERROR: {error_msg}")
     
@@ -1001,8 +1227,12 @@ class MediaOrganizer:
                         'event': event,
                         'container': container
                     })
-                    event.wait()
-                    country = container['country']
+                    if event.wait(timeout=60):
+                        country = container['country']
+                    else:
+                        self._log(
+                            f"  Geocoding timed out while waiting for worker: {item_path}"
+                        )
 
                 with self.stats_lock:
                     if country:

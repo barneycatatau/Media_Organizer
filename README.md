@@ -20,6 +20,7 @@ Media Organizer scans any unstructured collection of images and videos, extracts
 ## 📋 Table of Contents
 
 - [✨ Features](#-features)
+- [🛡️ Safety](#️-safety)
 - [⚡ Quick Start](#-quick-start)
 - [🔧 Installation](#-installation)
 - [⚙️ Configuration](#️-configuration)
@@ -37,27 +38,52 @@ Media Organizer scans any unstructured collection of images and videos, extracts
 - 🌍 GPS geocoding via OpenStreetMap — **no API key required**
 - 📱 **HEIC** (iPhone) image support
 - 🎬 **Video** date extraction via FFmpeg
-- 🔒 **SHA-256** duplicate detection — within a run and against existing files
+- 🔒 **SHA-256** duplicate detection — across the current import and within each resolved destination folder
 - 🗑️ Safe duplicate removal — move to a review folder or delete permanently
 - 🔢 Optional **sequential file renaming**
 - ↩️ **Undo** any previous organization session using its log file
 - 📊 Detailed **HTML reports** with statistics, GPS breakdown, and errors
 - 🗄️ SQLite **GPS cache** — avoids redundant geocoding requests
 - ⚡ **Multi-threaded** processing
-- 🛡️ **Non-destructive** — files are always copied, never moved from the source
+- 🛡️ **Non-destructive organizer** — `media_organizer.py` only copies from the source
+
+---
+
+## 🛡️ Safety
+
+The three commands have different effects on files:
+
+| Command | Effect |
+|---------|--------|
+| `media_organizer.py` | Copies supported media to the destination. It does not modify the source. |
+| `duplicate_check.py` | Scans the entire `source_path` tree and **moves or permanently deletes** duplicate copies. |
+| `media_organizer_undo.py` | **Permanently deletes** destination files recorded in a selected organizer log. |
+
+For duplicate cleanup, set `move_duplicate_to_path` to a review directory outside `source_path`. Use `move_duplicate_to_path=no` only when permanent deletion is intentional.
 
 ---
 
 ## ⚡ Quick Start
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/barneycatatau/photo_organizer.git
+git clone https://github.com/barneycatatau/Media_Organizer.git
 cd photo_organizer
 pip install -r requirements.txt
 ```
 
-Edit `config.cfg`:
+Create a local configuration file. It is ignored by Git:
+
+```powershell
+# Windows PowerShell
+Copy-Item config.cfg.example config.cfg
+```
+
+```bash
+# Linux / macOS
+cp config.cfg.example config.cfg
+```
+
+Edit `config.cfg` and set at least:
 
 ```ini
 source_path=D:\Photos\Unsorted
@@ -65,7 +91,6 @@ destination_path=D:\Photos\Organized
 ```
 
 ```bash
-# 2. Run
 python media_organizer.py
 ```
 
@@ -78,7 +103,7 @@ Open `LOG/media_organizer_*.html` to review the results.
 ### Clone the repository
 
 ```bash
-git clone https://github.com/barneycatatau/photo_organizer.git
+git clone https://github.com/barneycatatau/Media_Organizer.git
 cd photo_organizer
 ```
 
@@ -94,24 +119,24 @@ pip install -r requirements.txt
 | pillow-heif | ≥ 0.13.0 | HEIC (iPhone) format support |
 | geopy | ≥ 2.4.0 | GPS geocoding (required only when `GPS=yes`) |
 
-### FFmpeg (Optional but Recommended)
+### FFmpeg (optional but recommended)
 
 FFmpeg enables accurate creation-date extraction from video files. Without it, the file modification date is used as a fallback.
 
 ```bash
-# Cross-platform (easiest)
-pip install imageio-ffmpeg
+# Linux
+sudo apt-get install ffmpeg
 
-# Or system-wide:
-# Windows:  download from ffmpeg.org and add to PATH
-# Linux:    sudo apt-get install ffmpeg
-# macOS:    brew install ffmpeg
+# macOS
+brew install ffmpeg
 ```
+
+On Windows, install FFmpeg from [ffmpeg.org](https://ffmpeg.org/download.html) and add its `bin` directory to `PATH`.
 
 Verify:
 
 ```bash
-ffmpeg -version
+ffprobe -version
 ```
 
 ---
@@ -120,12 +145,14 @@ ffmpeg -version
 
 All settings live in `config.cfg` under the `[PATHS]` section.
 
-### Minimum required
+### Paths to customize
 
 ```ini
 source_path=D:\Media
 destination_path=D:\OrganizedMedia
 ```
+
+Start from `config.cfg.example`; the organizer also requires non-empty `organize_image_extensions` and `organize_video_extensions` lists.
 
 ### Common options
 
@@ -133,7 +160,10 @@ destination_path=D:\OrganizedMedia
 |--------|--------|-------------|
 | `GPS` | `yes` / `no` | Geocode GPS coordinates to country names |
 | `year_wise` | `yes` / `no` | Group files by year |
-| `verify_before_copy` | `yes` / `no` | Skip files already present at the destination (SHA-256) |
+| `verify_before_copy` | `yes` / `no` | Skip identical files already present in the resolved destination folder (SHA-256) |
+| `network_username` | username or blank | Windows account used to connect to a UNC destination |
+| `network_password` | password or blank | Password for `network_username` |
+| `network_domain` | domain or blank | Optional Windows domain/workgroup |
 | `rename_prefix` | prefix or `no` | Sequential renaming, e.g. `IMG_` → `IMG_0001.jpg` |
 | `move_duplicate_to_path` | path or `no` | Move duplicates for review, or delete permanently |
 | `undo` | log path or `no` | Log file used by `media_organizer_undo.py` |
@@ -150,7 +180,16 @@ destination_path=D:\OrganizedMedia
 python media_organizer.py
 ```
 
-### Remove duplicates
+### Remove duplicates across a directory tree
+
+`duplicate_check.py` groups matching SHA-256 hashes across every supported file below `source_path`. It modifies that tree: duplicates are moved when `move_duplicate_to_path` is a path, or permanently deleted when it is `no`.
+
+Use a review directory outside `source_path`:
+
+```ini
+source_path=D:\MediaLibrary
+move_duplicate_to_path=D:\DuplicateReview
+```
 
 ```bash
 python duplicate_check.py
@@ -180,12 +219,16 @@ All scripts read the same `config.cfg` and write timestamped reports to `LOG/`.
 
 Output structure depends on the `year_wise` and `GPS` settings:
 
-| year_wise | GPS | Example output |
-|-----------|-----|----------------|
-| `yes` | `yes` | `2019/Brazil/photo.jpg` |
-| `yes` | `no` | `2019/photo.jpg` |
-| `no` | `yes` | `Brazil/photo.jpg` |
-| `no` | `no` | `photo.jpg` |
+| `year_wise` | `GPS` | GPS result | Example output |
+|-------------|-------|------------|----------------|
+| `yes` | `yes` | Country found | `2019/Brazil/photo.jpg` |
+| `yes` | `yes` | No country | `2019/photo.jpg` |
+| `yes` | `no` | Not used | `2019/photo.jpg` |
+| `no` | `yes` | Country found | `Brazil/Phone/DCIM/photo.jpg` |
+| `no` | `yes` | No country | `Phone/DCIM/photo.jpg` |
+| `no` | `no` | Not used | `Phone/DCIM/photo.jpg` |
+
+When `year_wise=yes`, the original source folders are not reproduced. When `year_wise=no`, their paths relative to `source_path` are preserved. Empty source folders are not copied.
 
 ---
 
@@ -193,28 +236,58 @@ Output structure depends on the `year_wise` and `GPS` settings:
 
 ### Media Organization Flow
 
-![Media Organizer Flow](./readme/media_organizer_flow.png)
+```mermaid
+flowchart LR
+    A[Scan source_path recursively] --> B[Read dates and optional GPS]
+    B --> C[Calculate SHA-256]
+    C --> D{Hash already copied in this run?}
+    D -->|yes| I[Write log and HTML report]
+    D -->|no| E[Resolve destination folder]
+    E --> F{verify_before_copy}
+    F -->|yes| G{Identical file in target folder or descendants?}
+    F -->|no| H[Copy file]
+    G -->|yes| I
+    G -->|no| H
+    H --> I
+```
 
 For each file found in the source, the organizer:
 
-1. Extracts the creation date in priority order: `DateTimeOriginal` → `DateTimeDigitized` → file modification date. The **oldest** value across all sources is used.
-2. Resolves GPS coordinates to a country name via OpenStreetMap Nominatim (results are cached in a local SQLite database).
-3. Calculates a SHA-256 hash for duplicate detection against files already in the destination.
-4. Copies the file into the appropriate subfolder at the destination.
+1. Connects to a Windows UNC share when credentials are configured and verifies that the destination is writable.
+2. Extracts available EXIF/video and filesystem dates and uses the earliest valid year.
+3. Resolves GPS coordinates to a country name via OpenStreetMap Nominatim (results are cached in a local SQLite database). Worker failures and excessive waits are logged instead of blocking a media-processing worker forever.
+4. Calculates a SHA-256 hash. A run-wide index skips identical source files even when they came from different subfolders. When `verify_before_copy=yes`, a second index checks files already present in the resolved destination folder and its descendants; it does not search unrelated year or country folders. Indexing progress and cache reuse are shown in the console and log.
+5. Copies the file into the appropriate subfolder at the destination.
 
 ---
 
 ### Duplicate Detection Flow
 
-![Duplicate Check Flow](./readme/duplicate_check_flow.png)
+```mermaid
+flowchart LR
+    A[Scan source_path recursively] --> B[Hash every supported file]
+    B --> C[Group the entire tree by SHA-256]
+    C --> D[Keep the file with the lowest filesystem ctime]
+    D --> E{move_duplicate_to_path}
+    E -->|directory| F[Move duplicates for review]
+    E -->|no| G[Permanently delete duplicates]
+    F --> H[Write log and HTML report]
+    G --> H
+```
 
-The duplicate checker groups all files in the library by SHA-256 hash. Within each group, the **oldest file by creation date** is kept. In case of a date tie, the alphabetically earlier filename wins. All other files are moved or deleted according to `move_duplicate_to_path`.
+The comparison covers all supported files below `source_path`, including files in different subfolders. Only byte-for-byte identical content has the same SHA-256 hash; visually similar or re-encoded media is not considered a duplicate. Within each group, the file with the lowest filesystem `ctime` is kept (creation time on Windows; metadata-change time on Unix-like systems). A tie is resolved by the case-insensitive filename. Moved duplicates retain their path relative to `source_path` below the review directory.
 
 ---
 
 ### Undo Flow
 
-![Media Organizer Undo Flow](./readme/media_organizer_undo_flow.png)
+```mermaid
+flowchart LR
+    A[Read undo path from config.cfg] --> B[Parse copied destination paths from the run log]
+    B --> C[Permanently delete those destination files]
+    C --> D[Remove empty destination folders]
+    D --> E[Write undo log and HTML report]
+```
 
 The undo utility reads the `.log` file produced by a previous organization run, removes every file that was copied during that session, and deletes any folders that become empty. The source directory is never touched.
 
@@ -228,9 +301,9 @@ Every script generates a timestamped `.log` and `.html` report in the `LOG/` dir
 |--------|--------|
 | `media_organizer.py` | `LOG/media_organizer_*.html` |
 | `duplicate_check.py` | `LOG/duplicate_check_*.html` |
-| `media_organizer_undo.py` | `LOG/media_organizer_undo_*.html` |
+| `media_organizer_undo.py` | `LOG/undo_*.html` |
 
-Reports include processing statistics, GPS country breakdown, folder structure summary, ignored files, and any errors encountered.
+Reports include statistics, configuration details, affected paths, and errors appropriate to each command.
 
 📖 Report reference: [docs/Report.md](docs/Report.md)
 
