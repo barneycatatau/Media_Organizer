@@ -2,6 +2,8 @@
 # ─────────────────────────────────────────────────────────────
 # SOURCE — folder to scan recursively for photos and videos
 #   Used by: media_organizer.py, duplicate_check.py
+#   media_organizer.py only reads this tree.
+#   duplicate_check.py can MOVE or DELETE files in this tree.
 # ─────────────────────────────────────────────────────────────
 # Windows local path:
 source_path=C:\Photos\Unsorted
@@ -18,9 +20,18 @@ source_path=C:\Photos\Unsorted
 destination_path=C:\Photos\Organized
 # destination_path=\\192.168.1.100\NAS\Organized
 
+# Optional Windows network credentials for UNC destinations.
+# Leave blank when the share is already accessible in the current Windows session.
+# Fill these when the script runs elevated, as a scheduled task, or as another user.
+network_username=
+network_password=
+# Optional domain/workgroup. You can also include it in network_username (DOMAIN\user).
+network_domain=
+
 # ─────────────────────────────────────────────────────────────
 # DUPLICATES — where to move duplicate files found by duplicate_check.py
-#   Use a valid path to move duplicates for manual review (safer).
+#   Exact SHA-256 matches are grouped across the entire source_path tree.
+#   Use a valid path outside source_path for manual review (safer).
 #   Use 'no' to permanently delete duplicates (no recovery possible).
 # ─────────────────────────────────────────────────────────────
 move_duplicate_to_path=C:\Photos\Duplicates
@@ -40,34 +51,38 @@ organize_video_extensions=mov, avi, mp4, mkv
 
 # ─────────────────────────────────────────────────────────────
 # GPS — group files by country using embedded GPS coordinates
-#   yes → destination\YYYY\Country\file.jpg
-#   no  → destination\YYYY\file.jpg
+#   When year_wise=yes and a country is found:
+#     destination\YYYY\Country\file.jpg
+#   With no country result, the country folder is omitted.
 #
 # Uses OpenStreetMap Nominatim (free, no API key needed).
 # Responses are cached in a local SQLite database.
 # Rate limit: 1 request per second.
 # ─────────────────────────────────────────────────────────────
-GPS=yes
+GPS=no
 
 # ─────────────────────────────────────────────────────────────
 # YEAR-WISE — group files by year
 #   yes + GPS=yes → destination\YYYY\Country\file.jpg
 #   yes + GPS=no  → destination\YYYY\file.jpg
-#   no  + GPS=yes → destination\Country\file.jpg
-#   no  + GPS=no  → destination\file.jpg
+#   no  + GPS=yes → destination\Country\<source-relative-folders>\file.jpg
+#   no  + GPS=no  → destination\<source-relative-folders>\file.jpg
+#   With year_wise=yes, source subfolders are not reproduced.
+#   With year_wise=no, source subfolders are preserved.
 # ─────────────────────────────────────────────────────────────
 year_wise=yes
 
 # ─────────────────────────────────────────────────────────────
-# VERIFY BEFORE COPY — skip files already present at destination
-#   yes → computes SHA-256 hash; skips identical files (slower, safer)
+# VERIFY BEFORE COPY — skip files already present in the resolved destination folder
+#   yes → indexes the target folder and descendants by SHA-256 (slower, safer)
 #   no  → skips verification (faster on first run)
+# Duplicate source files are still skipped globally within the current run.
 # ─────────────────────────────────────────────────────────────
 verify_before_copy=yes
 
 # ─────────────────────────────────────────────────────────────
 # RENAME PREFIX — rename files with a sequential counter
-#   no          → keep original filename (duplicates get a numeric suffix)
+#   no          → keep original filename (different-content name conflicts get a suffix)
 #   IMG_        → IMG_0001.jpg, IMG_0002.jpg, ...
 #   PHOTO_      → PHOTO_0001.jpg, PHOTO_0002.jpg, ...
 # ─────────────────────────────────────────────────────────────

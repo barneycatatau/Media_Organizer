@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Duplicate Check Script
-Scans destination folders for duplicate media files within the same folder using hashes.
+Scans the entire source tree for duplicate media files using hashes.
 """
 import configparser
 import hashlib
@@ -27,7 +27,7 @@ class FileHashResult:
 
 
 class DuplicateChecker:
-    """Checks for duplicate media files within the same folder."""
+    """Checks for duplicate media files across the entire source tree."""
 
     def __init__(self, config_file: str = 'config.cfg'):
         self.config_file = config_file
@@ -270,57 +270,59 @@ class DuplicateChecker:
         self._log(f"Workers in use: {self.workers_used}")
         print(f"Workers in use: {self.workers_used}")
 
+        all_files_to_process: List[str] = []
         for folder_path, files_to_process in self._iter_folders(self.source_path or ''):
             self._log(f"Hashing folder: {folder_path} ({len(files_to_process)} files)")
+            all_files_to_process.extend(files_to_process)
 
-            results: List[FileHashResult] = []
-            with ThreadPoolExecutor(max_workers=self.workers_used) as executor:
-                for result in executor.map(self._hash_worker, files_to_process):
-                    if result:
-                        results.append(result)
+        results: List[FileHashResult] = []
+        with ThreadPoolExecutor(max_workers=self.workers_used) as executor:
+            for result in executor.map(self._hash_worker, all_files_to_process):
+                if result:
+                    results.append(result)
 
-            grouped: Dict[str, List[FileHashResult]] = {}
-            for item in results:
-                grouped.setdefault(item.file_hash, []).append(item)
+        grouped: Dict[str, List[FileHashResult]] = {}
+        for item in results:
+            grouped.setdefault(item.file_hash, []).append(item)
 
-            for group_items in grouped.values():
-                if len(group_items) == 1:
-                    with self.stats_lock:
-                        self.stats['unique_files'] += 1
-                    continue
-
-                keep_item = self._select_keep_file(group_items)
-                duplicates = [
-                    item for item in group_items if item.file_path != keep_item.file_path
-                ]
-                duplicates_sorted = sorted(
-                    duplicates,
-                    key=lambda item: (item.ctime, os.path.basename(item.file_path).lower()),
-                )
-
+        for group_items in grouped.values():
+            if len(group_items) == 1:
                 with self.stats_lock:
                     self.stats['unique_files'] += 1
-                    self.stats['duplicate_files'] += len(duplicates_sorted)
+                continue
 
-                self._log_duplicate_group(keep_item, duplicates_sorted)
+            keep_item = self._select_keep_file(group_items)
+            duplicates = [
+                item for item in group_items if item.file_path != keep_item.file_path
+            ]
+            duplicates_sorted = sorted(
+                duplicates,
+                key=lambda item: (item.ctime, os.path.basename(item.file_path).lower()),
+            )
 
-                for duplicate_item in duplicates_sorted:
-                    try:
-                        target_path = self._handle_duplicate(duplicate_item.file_path)
-                        if target_path is None:
-                            self._log(f"Action: DELETE | {duplicate_item.file_path}")
-                        else:
-                            self._log(
-                                "Action: MOVE | "
-                                f"{duplicate_item.file_path} -> {target_path}"
-                            )
-                    except Exception as exc:
-                        with self.stats_lock:
-                            self.stats['errors'].append(
-                                f"Error handling duplicate {duplicate_item.file_path}: {exc}"
-                            )
+            with self.stats_lock:
+                self.stats['unique_files'] += 1
+                self.stats['duplicate_files'] += len(duplicates_sorted)
 
-                self._print_progress()
+            self._log_duplicate_group(keep_item, duplicates_sorted)
+
+            for duplicate_item in duplicates_sorted:
+                try:
+                    target_path = self._handle_duplicate(duplicate_item.file_path)
+                    if target_path is None:
+                        self._log(f"Action: DELETE | {duplicate_item.file_path}")
+                    else:
+                        self._log(
+                            "Action: MOVE | "
+                            f"{duplicate_item.file_path} -> {target_path}"
+                        )
+                except Exception as exc:
+                    with self.stats_lock:
+                        self.stats['errors'].append(
+                            f"Error handling duplicate {duplicate_item.file_path}: {exc}"
+                        )
+
+            self._print_progress()
 
         print()
         self._log("Hashing completed.")
